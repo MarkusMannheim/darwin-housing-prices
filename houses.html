@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <!-- Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-155991615-1"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag("js", new Date());
+      gtag("config", "UA-155991615-1");
+    </script>
+
+    <!-- my stuff -->
+    <meta charset="utf-8">
+    <title>Darwin housing prices</title>
+    <meta name="author" content="Markus Mannheim">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- initial scripts -->
+    <script src="./resources/d3.v6.min.js"></script>
+    <script src="./resources/topojson.v3.min.js"></script>
+    <link href="./resources/style.css" rel="stylesheet">
+    <link href="./resources/abcLogo64.png" rel="icon">
+  </head>
+
+  <body>
+    <container id="container">
+      <svg id="map">
+        <defs>
+          <linearGradient id="gradient" x1="0%", x2="0%", y1="100%", y2="0%"></linearGradient>
+        </defs>
+        <g id="mapGroup">
+          <rect id="touchscreen" onclick="click()"></rect>
+          <g id="suburbs"></g>
+          <g id="labels"></g>
+          <path id="water"></path>
+          <g id="legend">
+            <rect id="legendBackground"></rect>
+            <rect id="bar"></rect>
+          </g>
+        </g>
+      </svg>
+      <div id="header">
+        <h1>HOUSE PRICE GROWTH</h1>
+      </div>
+      <div id="tip"></div>
+      <div id="footer">
+        This shows difference in median price between August 2020 and August 2021.
+        Suburbs with fewer than 20 sales are excluded.
+        Sources: CoreLogic, ABS. Chart: Markus Mannheim
+      </div>
+      <div id="tip"></div>
+    </container>
+
+    <script>
+      // page elements
+      header = d3.select("#header");
+      map = d3.select("#map");
+      mapGroup = d3.select("#mapGroup");
+      touchscreen = d3.select("#touchscreen");
+      suburbGroup = d3.select("#suburbs");
+      water = d3.select("#water");
+      footer = d3.select("#footer");
+      gradient = d3.select("#gradient");
+      legend = d3.select("#legend");
+      bar = d3.select("#bar");
+      legendBackground = d3.select("#legendBackground");
+      tip = d3.select("#tip");
+
+      // load LGA data
+      Promise.all([
+        d3.json("./data/suburbs.topojson"),
+        d3.json("./data/water.topojson")
+      ])
+        .then(function(data) {
+
+          // prepare data
+          suburbData = topojson.feature(data[0], data[0].objects.areas);
+          waterData = topojson.feature(data[1], data[1].objects.areas);
+          defaultView = {
+            type: "FeatureCollection",
+            features: suburbData.features
+              .filter(function(d) {
+                return d.properties.houses_2021;
+              })
+          };
+          zoomData = defaultView;
+
+          colours = [
+            "#EAF2DC",
+            "#BFECCF",
+            "#9BDED3",
+            "#7ACFD4",
+            "#5EC0CE",
+            "#3FB2C6",
+            "#23A3BC",
+            "#188CAD",
+            "#0E75A0",
+            "#085B96",
+            "#02408D",
+            "#002775",
+            "#00104B"
+          ];
+
+          colourRange = d3.extent(suburbData.features, function(d) {
+            return d.properties.houses_2021 / d.properties.houses_2020 - 1;
+          });
+
+          colour = d3.scaleLinear()
+            .range(colours)
+            .domain(colours.map(function(d, i) {
+              return i / (colours.length - 1) * (colourRange[1] - colourRange[0]) + colourRange[0];
+            }))
+            .interpolate(d3.interpolateRgb);
+
+          colours.forEach(function(d, i) {
+            gradient.append("stop")
+              .attr("stop-color", d)
+              .attr("offset", (i / (colours.length - 1) * 100) + "%");
+          });
+
+          scale = d3.scaleLinear()
+            .domain(colourRange);
+          axis = d3.axisLeft(scale)
+            .tickSizeOuter(0)
+            .ticks(4, "+.0%");
+
+          // prepare map
+          projection = d3.geoConicEqualArea()
+            .parallels([-3.460834, -21.460834])
+            .rotate([-130.844442, 0]);
+          path = d3.geoPath()
+            .projection(projection);
+          water.datum(waterData);
+          suburbGroup.selectAll(".suburb")
+            .data(suburbData.features)
+          .enter().append("g")
+            .classed("suburb", true);
+          d3.selectAll(".suburb")
+            .append("path")
+              .style("fill", function(d) {
+                return !d.properties.houses_2021 ? null : colour(d.properties.houses_2021 / d.properties.houses_2020 - 1);
+              })
+              .on("click", click);
+          d3.selectAll(".suburb")
+            .append("text")
+              .text(function(d) {
+                return d.properties.name;
+              });
+          clicked = false;
+          zoomed = false;
+          selected = false;
+
+          // fade in
+          d3.timeout(function() {
+            window.addEventListener("resize", resize);
+            resize();
+            map.transition()
+              .duration(500)
+              .style("opacity", 1)
+              .on("end", function() {
+                d3.timeout(function() {
+                  if (!clicked) {
+                    changeLabel((width < 500 ? "touch suburb for details" : "click suburb for details"));
+                  }
+                }, 2000);
+              });
+          }, 500);
+        });
+
+      function resize() {
+        mapDimensions = document.getElementById("map").getBoundingClientRect();
+        width = mapDimensions.width;
+        height = mapDimensions.height;
+        margin = width < 500 ?
+          {
+            top: 32, right: 64, bottom: 16, left: 16
+          } :
+          {
+            top: 32, right: 64, bottom: 16, left: 16
+          };
+        projection.fitExtent([[margin.left, margin.top], [width - margin.right, height - margin.bottom]], zoomData);
+        mapGroup.selectAll("path")
+          .attr("d", path);
+        suburbGroup.selectAll("text")
+          .attr("x", function(d) {
+            return projection(d3.geoCentroid(d))[0];
+          })
+          .attr("y", function(d) {
+            return projection(d3.geoCentroid(d))[1];
+          });
+        bar.attr("width", width < 500 ? 24 : 32)
+          .attr("height", height / 4 - 16);
+        scale.range([height / 4 - 16, 0]);
+        legend.attr("transform", "translate(" + (width - (width < 500 ? 24 : 32) - 16) + ", " + (height / 4 * 3) + ")")
+          .call(axis);
+        legendBackground.attr("x", -45)
+          .attr("y", -10)
+          .attr("width", width < 500 ? 24 + 10 + 44 : 32 + 10 + 45)
+          .attr("height", height / 4 + 4)
+      }
+
+      function click(event, object) {
+        clicked = true;
+        if (!object || selected == object || !object.properties.houses_2021) {
+          zoomed = false;
+          selected = false;
+          zoomData = defaultView;
+        } else {
+          zoomed = true;
+          selected = object;
+          zoomData = object;
+        }
+        zoom();
+      }
+
+      function zoom() {
+        projection.fitExtent([[margin.left, margin.top], [width - margin.right, height - margin.bottom]], zoomData);
+        mapGroup.selectAll("path")
+          .transition()
+            .duration(500)
+            .attr("d", path);
+        suburbGroup.selectAll("text")
+          .transition()
+            .duration(500)
+            .style("opacity", function() {
+              return zoomed ? 1 : 0;
+            })
+            .attr("x", function(d) {
+              return projection(d3.geoCentroid(d))[0];
+            })
+            .attr("y", function(d) {
+              return projection(d3.geoCentroid(d))[1];
+            });
+        tip.style("opacity", 0)
+          .html(function() {
+            if (zoomed) {
+              return "<h1>" + selected.properties.name + "</h1>" +
+                     "<p>median house price: <span>" + d3.format("$,.0f")(selected.properties.houses_2021) + "</span></p>" +
+                     "<p>increase in 12 mths: <span>" + d3.format("+.1%")(selected.properties.houses_2021 / selected.properties.houses_2020 - 1) + "</span></p>";
+            } else {
+              return "";
+            }
+          })
+          .transition()
+            .duration(500)
+            .style("opacity", function() {
+              return zoomed ? 1 : 0;
+            });
+      }
+
+      function changeLabel(text) {
+        header.append("p")
+          .text(text)
+          .transition()
+            .duration(500)
+            .style("transform", "rotateX(0deg)")
+          .transition()
+            .delay(3000)
+            .duration(500)
+            .style("transform", "rotateX(-90deg)")
+          .remove();
+      }
+    </script>
+  </body>
+</html>
