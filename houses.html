@@ -201,7 +201,8 @@
       }
 
       function click(event, object) {
-        clicked = true;
+        header.selectAll("p")
+          .remove();
         if (!object || selected == object || !object.properties.houses_2021) {
           zoomed = false;
           selected = false;

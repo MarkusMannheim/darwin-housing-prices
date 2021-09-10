@@ -202,7 +202,7 @@
 
       function click(event, object) {
         clicked = true;
-        header.select("p")
+        header.selectAll("p")
           .remove();
         if (!object || selected == object || !object.properties.units_2021) {
           zoomed = false;
